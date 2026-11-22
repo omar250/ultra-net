@@ -27,6 +27,36 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android --org com.ultranet.app --project-name ultra_net .
 
+      - name: Add Android network permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          content = manifest.read_text()
+
+          permissions = [
+              '    <uses-permission android:name="android.permission.INTERNET"/>',
+              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>',
+          ]
+
+          missing = [
+              p for p in permissions
+              if p.split('"')[1] not in content
+          ]
+
+          if missing:
+              content = content.replace(
+                  "<application",
+                  "\n".join(missing) + "\n    <application",
+                  1
+              )
+              manifest.write_text(content)
+
+          print("Network permissions configured successfully.")
+
+          PY
+
       - name: Get dependencies
         run: flutter pub get
 
