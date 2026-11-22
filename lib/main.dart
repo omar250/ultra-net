@@ -1,9 +1,10 @@
 import 'dart:async';
-import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
+
+import 'speed_engine.dart';
+import 'turbo_page.dart';
 
 void main() => runApp(const UltraNetApp());
 
@@ -14,6 +15,11 @@ class UltraNetApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         title: 'ULTRA NET',
         debugShowCheckedModeBanner: false,
+        // التطبيق عربي: اتجاه من اليمين لليسار
+        builder: (context, child) => Directionality(
+          textDirection: TextDirection.rtl,
+          child: child ?? const SizedBox.shrink(),
+        ),
         theme: ThemeData(
           brightness: Brightness.dark,
           scaffoldBackgroundColor: const Color(0xFF080D1C),
@@ -42,16 +48,17 @@ class _HomePageState extends State<HomePage> {
   String ping = '--';
   String downloadSpeed = '--';
   String uploadSpeed = '--';
-  String preferredNetwork = 'auto';
+  String peakSpeed = '--';
+  String liveSpeed = '--';
   String status = 'جاهز لفحص اتصالك';
+  String hint = '';
   bool loading = false;
 
   @override
   void initState() {
     super.initState();
     checkNetwork();
-    _subscription =
-        _connectivity.onConnectivityChanged.listen(_updateNetwork);
+    _subscription = _connectivity.onConnectivityChanged.listen(_updateNetwork);
   }
 
   @override
@@ -83,67 +90,20 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  String get selectedNetworkLabel {
-    switch (preferredNetwork) {
-      case 'wifi':
-        return 'Wi-Fi';
-      case 'mobile':
-        return 'بيانات الهاتف';
-      default:
-        return 'تلقائي';
+  String _usageHint(double mbps) {
+    if (mbps >= 100) {
+      return 'ممتاز: يكفي لبث 4K وتنزيل الملفات الكبيرة بسرعة وعدة أجهزة معاً.';
     }
-  }
-
-  Future<int> _measurePing() async {
-    final samples = <int>[];
-    for (var i = 0; i < 3; i++) {
-      final watch = Stopwatch()..start();
-      final response = await http
-          .get(Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'))
-          .timeout(const Duration(seconds: 12));
-      watch.stop();
-      if (response.statusCode == 200) {
-        samples.add(watch.elapsedMilliseconds);
-      }
+    if (mbps >= 25) {
+      return 'جيد جداً: بث 4K ومكالمات فيديو وألعاب أونلاين بلا مشاكل.';
     }
-    if (samples.isEmpty) throw Exception('Ping test failed');
-    samples.sort();
-    return samples[samples.length ~/ 2];
-  }
-
-  Future<double> _measureDownload() async {
-    const bytes = 5000000;
-    final watch = Stopwatch()..start();
-    final response = await http
-        .get(Uri.parse('https://speed.cloudflare.com/__down?bytes=$bytes'))
-        .timeout(const Duration(seconds: 40));
-    watch.stop();
-    if (response.statusCode != 200 || watch.elapsedMilliseconds == 0) {
-      throw Exception('Download test failed');
+    if (mbps >= 8) {
+      return 'جيد: بث HD ومكالمات فيديو وتصفح سلس.';
     }
-    return response.bodyBytes.length *
-        8 /
-        1000000 /
-        (watch.elapsedMilliseconds / 1000);
-  }
-
-  Future<double> _measureUpload() async {
-    const bytes = 500000;
-    final watch = Stopwatch()..start();
-    final response = await http
-        .post(
-          Uri.parse('https://speed.cloudflare.com/__up'),
-          headers: {'Content-Type': 'application/octet-stream'},
-          body: Uint8List(bytes),
-        )
-        .timeout(const Duration(seconds: 40));
-    watch.stop();
-    if (response.statusCode < 200 ||
-        response.statusCode >= 300 ||
-        watch.elapsedMilliseconds == 0) {
-      throw Exception('Upload test failed');
+    if (mbps >= 3) {
+      return 'متوسط: بث بجودة عادية وتصفح، وقد تتأثر مكالمات الفيديو.';
     }
-    return bytes * 8 / 1000000 / (watch.elapsedMilliseconds / 1000);
+    return 'ضعيف: يصلح للتصفح الخفيف والرسائل فقط. اقترب من الراوتر أو بدّل الشبكة.';
   }
 
   Future<void> testSpeed() async {
@@ -153,26 +113,48 @@ class _HomePageState extends State<HomePage> {
       ping = '...';
       downloadSpeed = '...';
       uploadSpeed = '...';
+      peakSpeed = '--';
+      liveSpeed = '--';
+      hint = '';
       status = 'جارٍ قياس زمن الاستجابة';
     });
 
     try {
-      final measuredPing = await _measurePing();
+      final measuredPing = await SpeedEngine.measurePing();
       if (!mounted) return;
-      setState(() => status = 'جارٍ قياس سرعة التنزيل');
-
-      final measuredDownload = await _measureDownload();
-      if (!mounted) return;
-      setState(() => status = 'جارٍ قياس سرعة الرفع');
-
-      final measuredUpload = await _measureUpload();
-      if (!mounted) return;
-
       setState(() {
         ping = '$measuredPing ms';
-        downloadSpeed = measuredDownload.toStringAsFixed(2) + ' Mbps';
-        uploadSpeed = measuredUpload.toStringAsFixed(2) + ' Mbps';
+        status = 'جارٍ قياس سرعة التنزيل (اتصالات متوازية)';
+      });
+
+      final download = await SpeedEngine.measureDownload(
+        onSpeed: (mbps) {
+          if (mounted) {
+            setState(() => liveSpeed = '${mbps.toStringAsFixed(1)} Mbps');
+          }
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        downloadSpeed = '${download.average.toStringAsFixed(2)} Mbps';
+        peakSpeed = '${download.peak.toStringAsFixed(2)} Mbps';
+        status = 'جارٍ قياس سرعة الرفع';
+        liveSpeed = '--';
+      });
+
+      final upload = await SpeedEngine.measureUpload(
+        onSpeed: (mbps) {
+          if (mounted) {
+            setState(() => liveSpeed = '${mbps.toStringAsFixed(1)} Mbps');
+          }
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        uploadSpeed = '${upload.average.toStringAsFixed(2)} Mbps';
+        liveSpeed = '--';
         status = 'اكتمل اختبار السرعة';
+        hint = _usageHint(download.average);
       });
     } catch (_) {
       if (!mounted) return;
@@ -181,6 +163,7 @@ class _HomePageState extends State<HomePage> {
         if (ping == '...') ping = '--';
         if (downloadSpeed == '...') downloadSpeed = '--';
         if (uploadSpeed == '...') uploadSpeed = '--';
+        liveSpeed = '--';
       });
     } finally {
       if (mounted) setState(() => loading = false);
@@ -205,8 +188,7 @@ class _HomePageState extends State<HomePage> {
           padding: const EdgeInsets.all(20),
           children: [
             const SizedBox(height: 12),
-            const Icon(Icons.speed_rounded,
-                color: Colors.cyanAccent, size: 82),
+            const Icon(Icons.speed_rounded, color: Colors.cyanAccent, size: 82),
             const SizedBox(height: 8),
             const Center(
               child: Text(
@@ -218,46 +200,11 @@ class _HomePageState extends State<HomePage> {
             _infoCard('الاتصال الحالي', network, Icons.network_check),
             _infoCard('زمن الاستجابة (Ping)', ping, Icons.timer_outlined),
             _infoCard('سرعة التنزيل', downloadSpeed, Icons.download_rounded),
+            _infoCard('أعلى سرعة وصلت لها', peakSpeed, Icons.trending_up),
             _infoCard('سرعة الرفع', uploadSpeed, Icons.upload_rounded),
-            const SizedBox(height: 14),
-            _sectionTitle('إعدادات الاتصال'),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFF14213A),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.cyan.withOpacity(0.25)),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: preferredNetwork,
-                  isExpanded: true,
-                  items: const [
-                    DropdownMenuItem(
-                        value: 'auto', child: Text('اختيار تلقائي')),
-                    DropdownMenuItem(value: 'wifi', child: Text('Wi-Fi')),
-                    DropdownMenuItem(
-                        value: 'mobile', child: Text('بيانات الهاتف')),
-                  ],
-                  onChanged: loading
-                      ? null
-                      : (value) {
-                          if (value != null) {
-                            setState(() => preferredNetwork = value);
-                          }
-                        },
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'الوضع المحدد: $selectedNetworkLabel. تغيير الشبكة الفعلية يتم من إعدادات Android أو لوحة الاتصال السريع.',
-              style: const TextStyle(color: Colors.white60, fontSize: 12),
-            ),
-            const SizedBox(height: 14),
-            _infoCard('VPN', 'متوقف — لا يستخدم التطبيق VPN',
-                Icons.shield_outlined),
-            const SizedBox(height: 18),
+            if (loading)
+              _infoCard('السرعة اللحظية', liveSpeed, Icons.flash_on_rounded),
+            const SizedBox(height: 10),
             SizedBox(
               height: 56,
               child: ElevatedButton.icon(
@@ -271,8 +218,25 @@ class _HomePageState extends State<HomePage> {
                     : const Icon(Icons.bolt),
                 label: Text(
                   loading ? 'جارٍ الاختبار...' : 'ابدأ اختبار السرعة',
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.bold),
+                  style:
+                      const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 56,
+              child: OutlinedButton.icon(
+                onPressed: loading
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                              builder: (_) => const TurboPage()),
+                        ),
+                icon: const Icon(Icons.rocket_launch_rounded),
+                label: const Text(
+                  'Turbo: أقصى استفادة من الإنترنت',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ),
             ),
@@ -284,22 +248,24 @@ class _HomePageState extends State<HomePage> {
                 style: const TextStyle(color: Colors.cyanAccent),
               ),
             ),
+            if (hint.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  hint,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, height: 1.5),
+                ),
+              ),
+            ],
             const SizedBox(height: 18),
             const Text(
-              'تنبيه: التطبيق يقيس أداء الاتصال ولا يستطيع تجاوز السرعة التي توفرها شركة الإنترنت أو تقوية إشارة الشبكة من تلقاء نفسه.',
+              'تنبيه: التطبيق يقيس أداء الاتصال ولا يستطيع تجاوز السرعة التي توفرها شركة الإنترنت أو تقوية إشارة الشبكة من تلقاء نفسه. الاختبار يستهلك بيانات، فانتبه عند استخدام بيانات الهاتف.',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: Colors.white54, fontSize: 12, height: 1.5),
+              style:
+                  TextStyle(color: Colors.white54, fontSize: 12, height: 1.5),
             ),
           ],
-        ),
-      );
-
-  Widget _sectionTitle(String title) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Text(
-          title,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
       );
 
@@ -309,14 +275,13 @@ class _HomePageState extends State<HomePage> {
         decoration: BoxDecoration(
           color: const Color(0xFF14213A),
           borderRadius: BorderRadius.circular(17),
-          border: Border.all(color: Colors.cyan.withOpacity(0.24)),
+          border: Border.all(color: Colors.cyan.withValues(alpha: 0.24)),
         ),
         child: Row(
           children: [
             Icon(icon, color: Colors.cyanAccent, size: 28),
             const SizedBox(width: 13),
-            Expanded(
-                child: Text(title, style: const TextStyle(fontSize: 15))),
+            Expanded(child: Text(title, style: const TextStyle(fontSize: 15))),
             const SizedBox(width: 8),
             Flexible(
               child: Text(
