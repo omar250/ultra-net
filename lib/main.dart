@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
+import 'boost_page.dart';
 import 'speed_engine.dart';
 import 'turbo_page.dart';
 
@@ -53,6 +54,8 @@ class _HomePageState extends State<HomePage> {
   String status = 'جاهز لفحص اتصالك';
   String hint = '';
   bool loading = false;
+  int? lastPing;
+  double? lastDownload;
 
   @override
   void initState() {
@@ -124,6 +127,7 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       setState(() {
         ping = '$measuredPing ms';
+        lastPing = measuredPing;
         status = 'جارٍ قياس سرعة التنزيل (اتصالات متوازية)';
       });
 
@@ -138,6 +142,7 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         downloadSpeed = '${download.average.toStringAsFixed(2)} Mbps';
         peakSpeed = '${download.peak.toStringAsFixed(2)} Mbps';
+        lastDownload = download.average;
         status = 'جارٍ قياس سرعة الرفع';
         liveSpeed = '--';
       });
@@ -231,11 +236,33 @@ class _HomePageState extends State<HomePage> {
                     ? null
                     : () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
+                            builder: (_) => BoostPage(
+                              network: network,
+                              pingMs: lastPing,
+                              downloadMbps: lastDownload,
+                            ),
+                          ),
+                        ),
+                icon: const Icon(Icons.phone_android_rounded),
+                label: const Text(
+                  'تحسين الهاتف كله',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 56,
+              child: OutlinedButton.icon(
+                onPressed: loading
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
                               builder: (_) => const TurboPage()),
                         ),
                 icon: const Icon(Icons.rocket_launch_rounded),
                 label: const Text(
-                  'Turbo: أقصى استفادة من الإنترنت',
+                  'Turbo: تنزيل سريع لملف',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ),
